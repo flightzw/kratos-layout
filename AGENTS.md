@@ -164,7 +164,7 @@ proto 测试通过 Protovalidate 执行 CEL 约束；直接调用 service 的测
 
 ## 提交与安全
 
-- 提交遵循 Conventional Commits：`feat:`、`fix:`、`refactor:`、`chore(deps):`、
-  `docs:`、`test:`。生成文件与对应源定义放在同一个提交中。
+- 创建提交时必须遵循[约定式提交规范](.agents/rules/development.md#提交规范)，
+  提交信息保持精炼。生成文件与对应源定义放在同一个提交中。
 - 真实凭据不得写入已跟踪的配置文件，包括 `configs/config.yaml` 和 `gorm.gen.yaml`；
   运行时敏感信息通过本地环境或部署配置提供。
