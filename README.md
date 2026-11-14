@@ -8,6 +8,9 @@ Use this repository as a starting point for a new service. The included sample
 resource is only reference code for API shape, layering, code generation, and
 testing. Replace it with your own domain model when creating a real project.
 
+Development conventions: [Development rules](.agents/rules/development.md).
+Architecture and layering: [Repository guidelines](AGENTS.md).
+
 ## Create a New Project
 
 1. Copy or generate a repository from this template.

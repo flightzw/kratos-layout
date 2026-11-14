@@ -2,126 +2,91 @@ package data
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
-	"github.com/go-kratos/kratos-layout/internal/biz"
-	"github.com/go-kratos/kratos-layout/internal/data/ent"
-	"github.com/go-kratos/kratos-layout/internal/data/ent/todo"
+	"gorm.io/gorm"
 
-	"github.com/go-kratos/aip-go/ents"
-	"github.com/google/uuid"
+	"github.com/flightzw/kratos-layout/internal/biz"
+	"github.com/flightzw/kratos-layout/internal/data/model"
+	"github.com/flightzw/kratos-layout/pkg/aip"
+	aipgorm "github.com/flightzw/kratos-layout/pkg/aip/gorm"
 )
-
-// toBiz converts a persisted todo into its domain representation. The status
-// column is bound to biz.TodoStatus, so it carries over as-is.
-func toBiz(po *ent.Todo) *biz.Todo {
-	if po == nil {
-		return nil
-	}
-	return &biz.Todo{
-		ID:        po.ID,
-		Title:     po.Title,
-		Content:   po.Content,
-		Completed: po.Completed,
-		Status:    po.Status,
-		CreatedAt: po.CreatedAt,
-		UpdatedAt: po.UpdatedAt,
-	}
-}
 
 type todoRepo struct {
 	data *Data
 }
 
-// NewTodoRepo creates a new TodoRepo instance.
+// NewTodoRepo creates a repository using the shared database query client.
 func NewTodoRepo(data *Data) biz.TodoRepo {
 	return &todoRepo{data: data}
 }
 
-func (r *todoRepo) FindByID(ctx context.Context, id uuid.UUID) (*biz.Todo, error) {
-	po, err := r.data.db.Todo.Query().
-		Where(todo.IDEQ(id), todo.StatusEQ(biz.TodoStatusActive)).
-		Only(ctx)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, biz.ErrTodoNotFound
-		}
-		return nil, err
+func (t *todoRepo) CreateTodo(ctx context.Context, todo *biz.Todo) (int32, error) {
+	record := newTodo(todo)
+	if err := t.data.query.Todo.WithContext(ctx).Create(record); err != nil {
+		return 0, todoError("create todo", err)
 	}
-	return toBiz(po), nil
+	return record.ID, nil
 }
 
-func (r *todoRepo) ListTodos(ctx context.Context, opts ...biz.ListOption) ([]*biz.Todo, error) {
-	options := biz.ListOptions{Limit: 20}
-	for _, opt := range opts {
-		opt(&options)
-	}
-	if options.Offset < 0 || options.Limit <= 0 {
-		return nil, biz.ErrTodoInvalidArgument
-	}
-	// Offset pagination needs a total order, so id is always appended as the
-	// last sort key: without it rows that tie on the requested field may be
-	// returned in a different order per query, duplicating or skipping records
-	// across pages. UUIDv7 ids are time-ordered, so id alone is a sensible
-	// default when the caller asks for nothing.
-	pos, err := r.data.db.Todo.Query().
-		Where(todo.StatusEQ(biz.TodoStatusActive)).
-		Where(ents.ApplyFilter(options.Filter)).
-		Order(ents.ApplyOrderBy(options.OrderBy), todo.ByID()).
-		Offset(options.Offset).
-		Limit(options.Limit).
-		All(ctx)
+func (t *todoRepo) GetTodo(ctx context.Context, id int32) (*biz.Todo, error) {
+	q := t.data.query.Todo
+	record, err := q.WithContext(ctx).Where(q.ID.Eq(id)).First()
 	if err != nil {
-		return nil, err
+		return nil, todoError("get todo", err)
 	}
-	todos := make([]*biz.Todo, 0, len(pos))
-	for _, po := range pos {
-		todos = append(todos, toBiz(po))
-	}
-	return todos, nil
+	return toBiz(record), nil
 }
 
-func (r *todoRepo) CreateTodo(ctx context.Context, t *biz.Todo) (*biz.Todo, error) {
-	po, err := r.data.db.Todo.Create().
-		SetTitle(t.Title).
-		SetContent(t.Content).
-		SetCompleted(t.Completed).
-		SetStatus(biz.TodoStatusActive).
-		Save(ctx)
-	if err != nil {
-		return nil, err
+func (t *todoRepo) ListTodo(ctx context.Context, opts ...aip.ListOption) (data []*biz.Todo, total int64, err error) {
+	if total, err = aipgorm.FindByPage(t.data.db, &data, opts...); err != nil {
+		return nil, 0, todoError("list todo", err)
 	}
-	return toBiz(po), nil
+	return data, total, nil
 }
 
-func (r *todoRepo) UpdateTodo(ctx context.Context, t *biz.Todo) (*biz.Todo, error) {
-	// status is not updatable here: it moves only through DeleteTodo.
-	po, err := r.data.db.Todo.UpdateOneID(t.ID).
-		Where(todo.StatusEQ(biz.TodoStatusActive)).
-		SetTitle(t.Title).
-		SetContent(t.Content).
-		SetCompleted(t.Completed).
-		Save(ctx)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, biz.ErrTodoNotFound
-		}
-		return nil, err
+func (t *todoRepo) UpdateTodo(ctx context.Context, id int32, form *biz.UpdateTodoForm) error {
+	q := t.data.query.Todo
+	if _, err := q.WithContext(ctx).Where(q.ID.Eq(id)).Update(q.Name, form.Name); err != nil {
+		return todoError("update todo", err)
 	}
-	return toBiz(po), nil
+	return nil
 }
 
-// DeleteTodo soft-deletes a todo by flipping its status to deleted. The row is
-// kept so it stays auditable, and every read path filters it out.
-func (r *todoRepo) DeleteTodo(ctx context.Context, id uuid.UUID) error {
-	affected, err := r.data.db.Todo.Update().
-		Where(todo.IDEQ(id), todo.StatusEQ(biz.TodoStatusActive)).
-		SetStatus(biz.TodoStatusDeleted).
-		Save(ctx)
+func (t *todoRepo) DeleteTodo(ctx context.Context, id int32) error {
+	q := t.data.query.Todo
+	result, err := q.WithContext(ctx).Where(q.ID.Eq(id)).Delete()
 	if err != nil {
-		return err
+		return todoError("delete todo", err)
 	}
-	if affected == 0 {
+	if result.RowsAffected == 0 {
 		return biz.ErrTodoNotFound
 	}
 	return nil
+}
+
+func newTodo(todo *biz.Todo) *model.Todo {
+	return &model.Todo{
+		ID:        todo.ID,
+		Name:      todo.Name,
+		CreatedAt: todo.CreatedAt,
+		UpdatedAt: todo.UpdatedAt,
+	}
+}
+
+func toBiz(todo *model.Todo) *biz.Todo {
+	return &biz.Todo{
+		ID:        todo.ID,
+		Name:      todo.Name,
+		CreatedAt: todo.CreatedAt,
+		UpdatedAt: todo.UpdatedAt,
+	}
+}
+
+func todoError(operation string, err error) error {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return biz.ErrTodoNotFound
+	}
+	return biz.ErrTodoStorage.WithCause(fmt.Errorf("%s: %w", operation, err))
 }

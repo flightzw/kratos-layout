@@ -7,16 +7,17 @@
 package main
 
 import (
-	"github.com/go-kratos/kratos-layout/internal/biz"
-	"github.com/go-kratos/kratos-layout/internal/conf"
-	"github.com/go-kratos/kratos-layout/internal/data"
-	"github.com/go-kratos/kratos-layout/internal/server"
-	"github.com/go-kratos/kratos-layout/internal/service"
+	"github.com/flightzw/kratos-layout/internal/biz"
+	"github.com/flightzw/kratos-layout/internal/conf"
+	"github.com/flightzw/kratos-layout/internal/data"
+	"github.com/flightzw/kratos-layout/internal/server"
+	"github.com/flightzw/kratos-layout/internal/service"
 	"github.com/go-kratos/kratos/v3"
 	"log/slog"
 )
 
 import (
+	_ "github.com/joho/godotenv/autoload"
 	_ "go.uber.org/automaxprocs"
 )
 
@@ -30,9 +31,13 @@ func wireApp(confServer *conf.Server, confData *conf.Data, logger *slog.Logger) 
 	}
 	todoRepo := data.NewTodoRepo(dataData)
 	todoUsecase := biz.NewTodoUsecase(todoRepo)
-	todoService := service.NewTodoService(todoUsecase)
-	grpcServer := server.NewGRPCServer(confServer, todoService)
-	httpServer := server.NewHTTPServer(confServer, todoService)
+	todoService, err := service.NewTodoService(todoUsecase)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	grpcServer := server.NewGRPCServer(confServer, todoService, logger)
+	httpServer := server.NewHTTPServer(confServer, todoService, logger)
 	app := newApp(logger, grpcServer, httpServer)
 	return app, func() {
 		cleanup()

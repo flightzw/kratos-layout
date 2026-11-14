@@ -1,0 +1,4 @@
+interface:
+  display_name: "Proto CEL 校验注解"
+  short_description: "为 Kratos 项目编写仅使用 CEL 的 Proto 校验注解与自定义错误提示"
+  default_prompt: "使用 $proto-validate-cel 为指定请求消息补充 CEL 校验注解，并提供中文错误提示。"

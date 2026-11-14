@@ -1,0 +1,295 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Todo 服务 API",
+    "description": "提供待办事项的创建、查询、更新和删除接口。",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/service/v1/todos": {
+      "get": {
+        "tags": [
+          "TodoService"
+        ],
+        "summary": "Get Todo List",
+        "operationId": "TodoService_ListTodo",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "页码",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "行数",
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "排序方式：asc-升序，desc-降序",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "排序字段",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "过滤条件表达式，参见：https://google.aip.dev/160",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/todo.v1.ListTodoReply"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "TodoService"
+        ],
+        "summary": "Create Todo",
+        "operationId": "TodoService_CreateTodo",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/todo.v1.CreateTodoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/todo.v1.CreateTodoReply"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/service/v1/todos/{id}": {
+      "get": {
+        "tags": [
+          "TodoService"
+        ],
+        "summary": "Get Todo Info",
+        "operationId": "TodoService_GetTodo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/todo.v1.GetTodoReply"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "TodoService"
+        ],
+        "summary": "Update Todo",
+        "operationId": "TodoService_UpdateTodo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/todo.v1.UpdateTodoRequest_Form"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/todo.v1.UpdateTodoReply"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "TodoService"
+        ],
+        "summary": "Delete Todo",
+        "operationId": "TodoService_DeleteTodo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/todo.v1.DeleteTodoReply"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "todo.v1.CreateTodoReply": {
+        "type": "object",
+        "properties": {}
+      },
+      "todo.v1.CreateTodoRequest": {
+        "required": [
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "名称"
+          }
+        }
+      },
+      "todo.v1.DeleteTodoReply": {
+        "type": "object",
+        "properties": {}
+      },
+      "todo.v1.GetTodoReply": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/todo.v1.Todo"
+          }
+        }
+      },
+      "todo.v1.ListTodoReply": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/todo.v1.Todo"
+            }
+          },
+          "total": {
+            "type": "string"
+          }
+        }
+      },
+      "todo.v1.Todo": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "主键 id",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string",
+            "description": "名称"
+          },
+          "created_at": {
+            "type": "string",
+            "description": "创建时间"
+          },
+          "updated_at": {
+            "type": "string",
+            "description": "更新时间"
+          }
+        }
+      },
+      "todo.v1.UpdateTodoReply": {
+        "type": "object",
+        "properties": {}
+      },
+      "todo.v1.UpdateTodoRequest_Form": {
+        "required": [
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "名称"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "TodoService"
+    }
+  ]
+}

@@ -2,405 +2,280 @@ package service
 
 import (
 	"context"
-	"io"
+	"errors"
 	"testing"
 	"time"
 
-	v1 "github.com/go-kratos/kratos-layout/api/todo/v1"
-	"github.com/go-kratos/kratos-layout/internal/biz"
+	kerrors "github.com/go-kratos/kratos/v3/errors"
+	"go.einride.tech/aip/filtering"
+	"google.golang.org/protobuf/proto"
 
-	kratoserrors "github.com/go-kratos/kratos/v3/errors"
-	"github.com/google/uuid"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	v1 "github.com/flightzw/kratos-layout/api/todo/v1"
+	"github.com/flightzw/kratos-layout/internal/biz"
+	"github.com/flightzw/kratos-layout/pkg/aip"
 )
 
-func newTestTodoService() *TodoService {
-	uc := biz.NewTodoUsecase(newFakeTodoRepo())
-	return NewTodoService(uc)
+// The concrete usecase forwards to this test-only repository, as in production.
+type todoRepoStub struct {
+	todo    *biz.Todo
+	todos   []*biz.Todo
+	total   int64
+	err     error
+	calls   int
+	ctx     context.Context
+	gotTodo *biz.Todo
+	gotForm *biz.UpdateTodoForm
+	gotID   int32
+	options aip.ListOptions
 }
 
-// fakeTodoRepo is an in-memory biz.TodoRepo used to test the service layer in
-// isolation from the storage boundary. It preserves insertion order so list
-// pagination is deterministic.
-type fakeTodoRepo struct {
-	order []uuid.UUID
-	todos map[uuid.UUID]*biz.Todo
-}
+var _ biz.TodoRepo = (*todoRepoStub)(nil)
 
-func newFakeTodoRepo() biz.TodoRepo {
-	return &fakeTodoRepo{todos: make(map[uuid.UUID]*biz.Todo)}
+func (r *todoRepoStub) record(ctx context.Context) {
+	r.calls++
+	r.ctx = ctx
 }
-
-func (r *fakeTodoRepo) FindByID(_ context.Context, id uuid.UUID) (*biz.Todo, error) {
-	todo, ok := r.todos[id]
-	if !ok {
-		return nil, biz.ErrTodoNotFound
-	}
-	return cloneTodo(todo), nil
+func (r *todoRepoStub) CreateTodo(ctx context.Context, todo *biz.Todo) (int32, error) {
+	r.record(ctx)
+	r.gotTodo = todo
+	return 9, r.err
 }
-
-func (r *fakeTodoRepo) ListTodos(_ context.Context, opts ...biz.ListOption) ([]*biz.Todo, error) {
-	options := biz.ListOptions{Limit: 20}
+func (r *todoRepoStub) GetTodo(ctx context.Context, id int32) (*biz.Todo, error) {
+	r.record(ctx)
+	r.gotID = id
+	return r.todo, r.err
+}
+func (r *todoRepoStub) ListTodo(ctx context.Context, opts ...aip.ListOption) ([]*biz.Todo, int64, error) {
+	r.record(ctx)
 	for _, opt := range opts {
-		opt(&options)
+		opt(&r.options)
 	}
-	if options.Offset < 0 || options.Limit <= 0 {
-		return nil, biz.ErrTodoInvalidArgument
-	}
-
-	todos := make([]*biz.Todo, 0, len(r.todos))
-	for _, id := range r.order {
-		if todo, ok := r.todos[id]; ok {
-			todos = append(todos, cloneTodo(todo))
-		}
-	}
-
-	if options.Offset >= len(todos) {
-		return []*biz.Todo{}, nil
-	}
-	end := min(options.Offset+options.Limit, len(todos))
-	return todos[options.Offset:end], nil
+	return r.todos, r.total, r.err
+}
+func (r *todoRepoStub) UpdateTodo(ctx context.Context, id int32, form *biz.UpdateTodoForm) error {
+	r.record(ctx)
+	r.gotID = id
+	r.gotForm = form
+	return r.err
+}
+func (r *todoRepoStub) DeleteTodo(ctx context.Context, id int32) error {
+	r.record(ctx)
+	r.gotID = id
+	return r.err
 }
 
-func (r *fakeTodoRepo) CreateTodo(_ context.Context, todo *biz.Todo) (*biz.Todo, error) {
-	now := time.Now()
-	todo = cloneTodo(todo)
-	todo.ID = uuid.Must(uuid.NewV7())
-	todo.Status = biz.TodoStatusActive
-	todo.CreatedAt = now
-	todo.UpdatedAt = now
-	r.order = append(r.order, todo.ID)
-	r.todos[todo.ID] = cloneTodo(todo)
-	return cloneTodo(todo), nil
+func newTestTodoService(t *testing.T, repo *todoRepoStub) *TodoService {
+	t.Helper()
+	svc, err := NewTodoService(biz.NewTodoUsecase(repo))
+	if err != nil {
+		t.Fatalf("construct service: %v", err)
+	}
+	return svc
 }
 
-func (r *fakeTodoRepo) UpdateTodo(_ context.Context, todo *biz.Todo) (*biz.Todo, error) {
-	current, ok := r.todos[todo.ID]
-	if !ok {
-		return nil, biz.ErrTodoNotFound
+func assertTodoReply(t *testing.T, got *v1.Todo, want *biz.Todo) {
+	t.Helper()
+	if got == nil || got.Id != want.ID || got.Name != want.Name || got.CreatedAt != want.CreatedAt.String() || got.UpdatedAt != want.UpdatedAt.String() {
+		t.Fatalf("DTO=%+v, want domain fields from %+v", got, want)
 	}
-	updated := cloneTodo(todo)
-	// status moves only through DeleteTodo, matching the real repo.
-	updated.Status = current.Status
-	updated.CreatedAt = current.CreatedAt
-	updated.UpdatedAt = time.Now()
-	r.todos[updated.ID] = cloneTodo(updated)
-	return cloneTodo(updated), nil
-}
-
-func (r *fakeTodoRepo) DeleteTodo(_ context.Context, id uuid.UUID) error {
-	if _, ok := r.todos[id]; !ok {
-		return biz.ErrTodoNotFound
-	}
-	delete(r.todos, id)
-	return nil
-}
-
-func cloneTodo(todo *biz.Todo) *biz.Todo {
-	if todo == nil {
-		return nil
-	}
-	clone := *todo
-	return &clone
 }
 
 func TestTodoServiceCRUD(t *testing.T) {
-	ctx := context.Background()
-	svc := newTestTodoService()
-
-	created, err := svc.CreateTodo(ctx, &v1.CreateTodoRequest{
-		Todo: &v1.Todo{
-			Title:     "write tests",
-			Content:   "cover todo CRUD",
-			Completed: false,
-		},
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	t.Run("create maps name", func(t *testing.T) {
+		var repo todoRepoStub
+		reply, err := newTestTodoService(t, &repo).CreateTodo(ctx, &v1.CreateTodoRequest{Name: "test"})
+		if err != nil || reply == nil {
+			t.Fatalf("reply=%+v error=%v", reply, err)
+		}
+		if repo.gotTodo == nil || repo.gotTodo.Name != "test" || repo.gotTodo.ID != 0 || !repo.gotTodo.CreatedAt.IsZero() || !repo.gotTodo.UpdatedAt.IsZero() {
+			t.Fatalf("domain todo=%+v", repo.gotTodo)
+		}
+		if repo.calls != 1 || repo.ctx != ctx {
+			t.Fatal("expected one call with original context")
+		}
 	})
-	if err != nil {
-		t.Fatalf("CreateTodo() error = %v", err)
-	}
-	if _, err := uuid.Parse(created.GetId()); err != nil {
-		t.Fatalf("CreateTodo() id = %q, want a UUID", created.GetId())
-	}
-	if created.GetCreatedAt() == nil || created.GetUpdatedAt() == nil {
-		t.Fatal("CreateTodo() did not set timestamps")
-	}
-	if created.GetStatus() != v1.TodoStatus_TODO_STATUS_ACTIVE {
-		t.Fatalf("CreateTodo() status = %v, want active", created.GetStatus())
-	}
-
-	got, err := svc.GetTodo(ctx, &v1.GetTodoRequest{Id: created.GetId()})
-	if err != nil {
-		t.Fatalf("GetTodo() error = %v", err)
-	}
-	if got.GetTitle() != "write tests" || got.GetContent() != "cover todo CRUD" {
-		t.Fatalf("GetTodo() = %+v, want created todo", got)
-	}
-
-	updated, err := svc.UpdateTodo(ctx, &v1.UpdateTodoRequest{
-		Todo: &v1.Todo{
-			Id:        created.GetId(),
-			Title:     "write service tests",
-			Completed: true,
-		},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"title", "completed"}},
+	t.Run("get maps resource and timestamps", func(t *testing.T) {
+		created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+		repo := &todoRepoStub{todo: &biz.Todo{ID: 9, Name: "test", CreatedAt: created, UpdatedAt: created.Add(time.Hour)}}
+		reply, err := newTestTodoService(t, repo).GetTodo(ctx, &v1.GetTodoRequest{Id: 9})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertTodoReply(t, reply.Data, repo.todo)
+		if repo.gotID != 9 || repo.calls != 1 || repo.ctx != ctx {
+			t.Fatalf("id=%d calls=%d context=%v", repo.gotID, repo.calls, repo.ctx)
+		}
 	})
-	if err != nil {
-		t.Fatalf("UpdateTodo() error = %v", err)
-	}
-	if updated.GetTitle() != "write service tests" || !updated.GetCompleted() {
-		t.Fatalf("UpdateTodo() = %+v, want updated title and completed", updated)
-	}
-	if updated.GetContent() != "cover todo CRUD" {
-		t.Fatalf("UpdateTodo() content = %q, want original content", updated.GetContent())
-	}
-	// status is read-only: an update cannot move it, only DeleteTodo can.
-	if updated.GetStatus() != v1.TodoStatus_TODO_STATUS_ACTIVE {
-		t.Fatalf("UpdateTodo() status = %v, want active", updated.GetStatus())
-	}
-
-	if _, err := svc.DeleteTodo(ctx, &v1.DeleteTodoRequest{Id: created.GetId()}); err != nil {
-		t.Fatalf("DeleteTodo() error = %v", err)
-	}
-	if _, err := svc.GetTodo(ctx, &v1.GetTodoRequest{Id: created.GetId()}); !kratoserrors.IsNotFound(err) {
-		t.Fatalf("GetTodo() after delete error = %v, want not found", err)
-	}
-}
-
-func TestTodoServiceListTodosPagination(t *testing.T) {
-	ctx := context.Background()
-	svc := newTestTodoService()
-
-	for _, title := range []string{"first", "second", "third"} {
-		if _, err := svc.CreateTodo(ctx, &v1.CreateTodoRequest{Todo: &v1.Todo{Title: title}}); err != nil {
-			t.Fatalf("CreateTodo(%q) error = %v", title, err)
+	t.Run("update passes ID separately from form", func(t *testing.T) {
+		var repo todoRepoStub
+		reply, err := newTestTodoService(t, &repo).UpdateTodo(ctx, &v1.UpdateTodoRequest{Id: 9, Form: &v1.UpdateTodoRequest_Form{Name: "changed"}})
+		if err != nil || reply == nil {
+			t.Fatalf("reply=%+v error=%v", reply, err)
 		}
-	}
-
-	firstPage, err := svc.ListTodos(ctx, &v1.ListTodosRequest{PageSize: 2})
-	if err != nil {
-		t.Fatalf("ListTodos(first page) error = %v", err)
-	}
-	if len(firstPage.GetTodos()) != 2 {
-		t.Fatalf("ListTodos(first page) len = %d, want 2", len(firstPage.GetTodos()))
-	}
-	if firstPage.GetNextPageToken() == "" {
-		t.Fatal("ListTodos(first page) next_page_token is empty")
-	}
-
-	secondPage, err := svc.ListTodos(ctx, &v1.ListTodosRequest{
-		PageSize:  2,
-		PageToken: firstPage.GetNextPageToken(),
+		if repo.gotID != 9 || repo.gotForm == nil || repo.gotForm.Name != "changed" || repo.calls != 1 || repo.ctx != ctx {
+			t.Fatalf("id=%d form=%+v calls=%d", repo.gotID, repo.gotForm, repo.calls)
+		}
 	})
-	if err != nil {
-		t.Fatalf("ListTodos(second page) error = %v", err)
-	}
-	if len(secondPage.GetTodos()) != 1 {
-		t.Fatalf("ListTodos(second page) len = %d, want 1", len(secondPage.GetTodos()))
-	}
-	if secondPage.GetNextPageToken() != "" {
-		t.Fatalf("ListTodos(second page) next_page_token = %q, want empty", secondPage.GetNextPageToken())
-	}
-	if secondPage.GetTodos()[0].GetTitle() != "third" {
-		t.Fatalf("ListTodos(second page) title = %q, want third", secondPage.GetTodos()[0].GetTitle())
-	}
-}
-
-func TestTodoServiceListTodosFilterAndOrderByValidation(t *testing.T) {
-	ctx := context.Background()
-	svc := newTestTodoService()
-
-	for _, todo := range []*v1.Todo{
-		{Title: "write docs", Content: "public docs", Completed: true},
-		{Title: "fix bug", Content: "private bug", Completed: false},
-		{Title: "fix api", Content: "public api", Completed: true},
-	} {
-		if _, err := svc.CreateTodo(ctx, &v1.CreateTodoRequest{Todo: todo}); err != nil {
-			t.Fatalf("CreateTodo(%q) error = %v", todo.GetTitle(), err)
+	t.Run("delete passes ID", func(t *testing.T) {
+		var repo todoRepoStub
+		reply, err := newTestTodoService(t, &repo).DeleteTodo(ctx, &v1.DeleteTodoRequest{Id: 9})
+		if err != nil || reply == nil {
+			t.Fatalf("reply=%+v error=%v", reply, err)
 		}
-	}
-
-	// The fake repo ignores filter and order_by; this asserts the service
-	// accepts and forwards them. See internal/data for the SQL translation.
-	reply, err := svc.ListTodos(ctx, &v1.ListTodosRequest{
-		PageSize: 10,
-		Filter:   `title:"fix" AND completed`,
-		OrderBy:  "title desc",
+		if repo.gotID != 9 || repo.calls != 1 || repo.ctx != ctx {
+			t.Fatalf("id=%d calls=%d", repo.gotID, repo.calls)
+		}
 	})
-	if err != nil {
-		t.Fatalf("ListTodos(filter/order) error = %v", err)
+}
+
+func TestListTodo(t *testing.T) {
+	tests := []struct {
+		name          string
+		req           *v1.ListTodoRequest
+		offset, limit int
+		sort          string
+		desc          bool
+	}{
+		{name: "defaults", req: &v1.ListTodoRequest{}, limit: 20, sort: "id"},
+		{name: "explicit page and sort", req: &v1.ListTodoRequest{Page: 3, PageSize: 5, Sort: "name", Order: "desc"}, offset: 10, limit: 5, sort: "name", desc: true},
+		{name: "maximum size", req: &v1.ListTodoRequest{PageSize: 100}, limit: 100, sort: "id"},
+		{name: "maximum page", req: &v1.ListTodoRequest{Page: 2147483647, PageSize: 1}, offset: 2147483646, limit: 1, sort: "id"},
+		{name: "created at", req: &v1.ListTodoRequest{Sort: "created_at"}, limit: 20, sort: "created_at"},
+		{name: "updated at with spaces", req: &v1.ListTodoRequest{Sort: " updated_at "}, limit: 20, sort: "updated_at"},
+		{name: "name filter", req: &v1.ListTodoRequest{Filter: `name = "test"`}, limit: 20, sort: "id"},
+		{name: "ID filter", req: &v1.ListTodoRequest{Filter: "id >= 9"}, limit: 20, sort: "id"},
+		{name: "created timestamp filter", req: &v1.ListTodoRequest{Filter: `created_at >= timestamp("2026-01-01T00:00:00Z")`}, limit: 20, sort: "id"},
+		{name: "updated timestamp filter", req: &v1.ListTodoRequest{Filter: `updated_at < timestamp("2027-01-01T00:00:00Z")`}, limit: 20, sort: "id"},
 	}
-	if len(reply.GetTodos()) != 3 {
-		t.Fatalf("ListTodos(filter/order) len = %d, want 3", len(reply.GetTodos()))
-	}
-	if reply.GetTodos()[0].GetTitle() != "write docs" {
-		t.Fatalf("ListTodos(filter/order) first title = %q, want insertion order", reply.GetTodos()[0].GetTitle())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+			todo := &biz.Todo{ID: 9, Name: "test", CreatedAt: created, UpdatedAt: created.Add(time.Hour)}
+			repo := &todoRepoStub{todos: []*biz.Todo{todo}, total: 42}
+			svc := newTestTodoService(t, repo)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			reply, err := svc.ListTodo(ctx, tt.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reply.Total != 42 || len(reply.Data) != 1 {
+				t.Fatalf("reply=%+v", reply)
+			}
+			assertTodoReply(t, reply.Data[0], todo)
+			opts := repo.options
+			if opts.Offset != tt.offset || opts.Limit != tt.limit || len(opts.OrderBy.Fields) != 1 {
+				t.Fatalf("options=%+v", opts)
+			}
+			if order := opts.OrderBy.Fields[0]; order.Path != tt.sort || order.Desc != tt.desc {
+				t.Fatalf("order=%+v", order)
+			}
+			expected, err := filtering.ParseFilterString(tt.req.Filter, svc.decl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !proto.Equal(opts.Filter.CheckedExpr, expected.CheckedExpr) {
+				t.Fatalf("filter was not forwarded: %+v", opts.Filter.CheckedExpr)
+			}
+			if repo.calls != 1 || repo.ctx != ctx {
+				t.Fatal("expected one call with original context")
+			}
+		})
 	}
 }
 
-func TestTodoServiceValidation(t *testing.T) {
+func TestListTodoEmpty(t *testing.T) {
+	reply, err := newTestTodoService(t, &todoRepoStub{}).ListTodo(context.Background(), &v1.ListTodoRequest{})
+	if err != nil || reply == nil {
+		t.Fatalf("reply=%+v error=%v", reply, err)
+	}
+	if reply.Total != 0 || len(reply.Data) != 0 {
+		t.Fatalf("reply=%+v", reply)
+	}
+}
+
+// Field constraints are covered by proto CEL tests; these are parsing failures.
+func TestListTodoParseErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		req    *v1.ListTodoRequest
+		reason string
+	}{
+		{name: "invalid sort syntax", req: &v1.ListTodoRequest{Sort: "id; DROP TABLE todo"}, reason: "SORT_RULE_INVALID"},
+		{name: "invalid direction syntax", req: &v1.ListTodoRequest{Order: "invalid"}, reason: "SORT_RULE_INVALID"},
+		{name: "invalid filter syntax", req: &v1.ListTodoRequest{Filter: "name ="}, reason: "FILTER_RULE_INVALID"},
+		{name: "undeclared filter field", req: &v1.ListTodoRequest{Filter: `missing = "test"`}, reason: "FILTER_RULE_INVALID"},
+		{name: "filter type mismatch", req: &v1.ListTodoRequest{Filter: `id = "text"`}, reason: "FILTER_RULE_INVALID"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var repo todoRepoStub
+			reply, err := newTestTodoService(t, &repo).ListTodo(context.Background(), tt.req)
+			if reply != nil || kerrors.Code(err) != 400 || kerrors.Reason(err) != tt.reason {
+				t.Fatalf("reply=%+v error=%v", reply, err)
+			}
+			if repo.calls != 0 {
+				t.Fatal("parse failure reached repo")
+			}
+		})
+	}
+}
+
+func TestTodoServicePropagatesErrors(t *testing.T) {
 	ctx := context.Background()
-	svc := newTestTodoService()
-	missingID := uuid.Must(uuid.NewV7()).String()
-
-	if _, err := svc.CreateTodo(ctx, &v1.CreateTodoRequest{Todo: &v1.Todo{Title: " "}}); !kratoserrors.IsBadRequest(err) {
-		t.Fatalf("CreateTodo(empty title) error = %v, want bad request", err)
+	tests := []struct {
+		name string
+		call func(*testing.T, *TodoService) error
+	}{
+		{name: "create", call: func(t *testing.T, s *TodoService) error {
+			reply, err := s.CreateTodo(ctx, &v1.CreateTodoRequest{Name: "test"})
+			if reply != nil {
+				t.Errorf("unexpected reply: %+v", reply)
+			}
+			return err
+		}},
+		{name: "get", call: func(t *testing.T, s *TodoService) error {
+			reply, err := s.GetTodo(ctx, &v1.GetTodoRequest{Id: 9})
+			if reply != nil {
+				t.Errorf("unexpected reply: %+v", reply)
+			}
+			return err
+		}},
+		{name: "list", call: func(t *testing.T, s *TodoService) error {
+			reply, err := s.ListTodo(ctx, &v1.ListTodoRequest{})
+			if reply != nil {
+				t.Errorf("unexpected reply: %+v", reply)
+			}
+			return err
+		}},
+		{name: "update", call: func(t *testing.T, s *TodoService) error {
+			reply, err := s.UpdateTodo(ctx, &v1.UpdateTodoRequest{Id: 9, Form: &v1.UpdateTodoRequest_Form{Name: "test"}})
+			if reply != nil {
+				t.Errorf("unexpected reply: %+v", reply)
+			}
+			return err
+		}},
+		{name: "delete", call: func(t *testing.T, s *TodoService) error {
+			reply, err := s.DeleteTodo(ctx, &v1.DeleteTodoRequest{Id: 9})
+			if reply != nil {
+				t.Errorf("unexpected reply: %+v", reply)
+			}
+			return err
+		}},
 	}
-	if _, err := svc.GetTodo(ctx, &v1.GetTodoRequest{Id: "not-a-uuid"}); !kratoserrors.IsBadRequest(err) {
-		t.Fatalf("GetTodo(malformed id) error = %v, want bad request", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			failure := biz.ErrTodoStorage.WithCause(context.DeadlineExceeded)
+			repo := &todoRepoStub{err: failure}
+			err := tt.call(t, newTestTodoService(t, repo))
+			if !errors.Is(err, failure) || !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error=%v, want original failure", err)
+			}
+			if repo.calls != 1 || repo.ctx != ctx {
+				t.Fatal("expected one call with original context")
+			}
+		})
 	}
-	if _, err := svc.DeleteTodo(ctx, &v1.DeleteTodoRequest{Id: ""}); !kratoserrors.IsBadRequest(err) {
-		t.Fatalf("DeleteTodo(empty id) error = %v, want bad request", err)
-	}
-	if _, err := svc.UpdateTodo(ctx, &v1.UpdateTodoRequest{
-		Todo:       &v1.Todo{Id: missingID, Title: "missing mask"},
-		UpdateMask: &fieldmaskpb.FieldMask{},
-	}); !kratoserrors.IsBadRequest(err) {
-		t.Fatalf("UpdateTodo(empty mask) error = %v, want bad request", err)
-	}
-	if _, err := svc.ListTodos(ctx, &v1.ListTodosRequest{PageToken: "bad-token"}); err == nil {
-		t.Fatal("ListTodos(bad token) error = nil, want error")
-	}
-	if _, err := svc.ListTodos(ctx, &v1.ListTodosRequest{Filter: `unknown:"value"`}); err == nil {
-		t.Fatal("ListTodos(unsupported filter) error = nil, want error")
-	}
-	if _, err := svc.ListTodos(ctx, &v1.ListTodosRequest{OrderBy: "content"}); err == nil {
-		t.Fatal("ListTodos(unsupported order_by) error = nil, want error")
-	}
-	if _, err := svc.DeleteTodo(ctx, &v1.DeleteTodoRequest{Id: missingID}); !kratoserrors.IsNotFound(err) {
-		t.Fatalf("DeleteTodo(missing id) error = %v, want not found", err)
-	}
-}
-
-func TestTodoServiceWatchTodos(t *testing.T) {
-	ctx := context.Background()
-	svc := newTestTodoService()
-
-	for _, todo := range []*v1.Todo{
-		{Title: "open task", Completed: false},
-		{Title: "done task", Completed: true},
-	} {
-		if _, err := svc.CreateTodo(ctx, &v1.CreateTodoRequest{Todo: todo}); err != nil {
-			t.Fatalf("CreateTodo(%q) error = %v", todo.GetTitle(), err)
-		}
-	}
-
-	stream := &watchTodosStream{fakeServerStream: fakeServerStream{ctx: ctx}}
-	if err := svc.WatchTodos(&v1.WatchTodosRequest{
-		PageSize: 10,
-	}, stream); err != nil {
-		t.Fatalf("WatchTodos() error = %v", err)
-	}
-	if len(stream.events) != 2 {
-		t.Fatalf("WatchTodos() events len = %d, want 2", len(stream.events))
-	}
-	if stream.events[0].GetAction() != "snapshot" || stream.events[0].GetTodo().GetTitle() != "open task" {
-		t.Fatalf("WatchTodos() event = %+v, want open snapshot", stream.events[0])
-	}
-}
-
-func TestTodoServiceSyncTodos(t *testing.T) {
-	ctx := context.Background()
-	svc := newTestTodoService()
-
-	// Seed a record so the update and delete actions have a real target.
-	seeded, err := svc.CreateTodo(ctx, &v1.CreateTodoRequest{Todo: &v1.Todo{Title: "seeded todo"}})
-	if err != nil {
-		t.Fatalf("CreateTodo() error = %v", err)
-	}
-
-	stream := &syncTodosStream{
-		fakeServerStream: fakeServerStream{ctx: ctx},
-		requests: []*v1.SyncTodoRequest{
-			{
-				Action: "create",
-				Todo:   &v1.Todo{Title: "streamed todo", Content: "from bidi stream"},
-			},
-			{
-				Action: "update",
-				Todo:   &v1.Todo{Id: seeded.GetId(), Completed: true},
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"completed"},
-				},
-			},
-			{
-				Action: "delete",
-				Id:     seeded.GetId(),
-			},
-		},
-	}
-
-	if err := svc.SyncTodos(stream); err != nil {
-		t.Fatalf("SyncTodos() error = %v", err)
-	}
-	if got := len(stream.events); got != 3 {
-		t.Fatalf("SyncTodos() events len = %d, want 3", got)
-	}
-	if stream.events[0].GetAction() != "created" || stream.events[0].GetTodo().GetTitle() != "streamed todo" {
-		t.Fatalf("SyncTodos() create event = %+v, want created todo", stream.events[0])
-	}
-	if stream.events[1].GetAction() != "updated" || !stream.events[1].GetTodo().GetCompleted() {
-		t.Fatalf("SyncTodos() update event = %+v, want completed update", stream.events[1])
-	}
-	if stream.events[2].GetAction() != "deleted" || stream.events[2].GetTodo().GetId() != seeded.GetId() {
-		t.Fatalf("SyncTodos() delete event = %+v, want deleted seeded id", stream.events[2])
-	}
-
-	// Events carry the reply the handler already built, so the server-assigned
-	// timestamps survive. Round-tripping through a DO would zero them.
-	for _, i := range []int{0, 1} {
-		todo := stream.events[i].GetTodo()
-		if todo.GetCreatedAt() == nil || todo.GetCreatedAt().AsTime().IsZero() {
-			t.Errorf("event %d created_at = %v, want the server timestamp", i, todo.GetCreatedAt())
-		}
-		if todo.GetUpdatedAt() == nil || todo.GetUpdatedAt().AsTime().IsZero() {
-			t.Errorf("event %d updated_at = %v, want the server timestamp", i, todo.GetUpdatedAt())
-		}
-	}
-	for i, event := range stream.events {
-		if event.GetEventTime() == nil || event.GetEventTime().AsTime().IsZero() {
-			t.Errorf("event %d event_time = %v, want a timestamp", i, event.GetEventTime())
-		}
-	}
-}
-
-type fakeServerStream struct {
-	ctx context.Context
-}
-
-func (s fakeServerStream) SetHeader(metadata.MD) error  { return nil }
-func (s fakeServerStream) SendHeader(metadata.MD) error { return nil }
-func (s fakeServerStream) SetTrailer(metadata.MD)       {}
-func (s fakeServerStream) Context() context.Context     { return s.ctx }
-func (s fakeServerStream) SendMsg(any) error            { return nil }
-func (s fakeServerStream) RecvMsg(any) error            { return nil }
-
-type watchTodosStream struct {
-	fakeServerStream
-	events []*v1.TodoEvent
-}
-
-func (s *watchTodosStream) Send(event *v1.TodoEvent) error {
-	s.events = append(s.events, event)
-	return nil
-}
-
-type syncTodosStream struct {
-	fakeServerStream
-	requests []*v1.SyncTodoRequest
-	events   []*v1.TodoEvent
-}
-
-func (s *syncTodosStream) Recv() (*v1.SyncTodoRequest, error) {
-	if len(s.requests) == 0 {
-		return nil, io.EOF
-	}
-	req := s.requests[0]
-	s.requests = s.requests[1:]
-	return req, nil
-}
-
-func (s *syncTodosStream) Send(event *v1.TodoEvent) error {
-	s.events = append(s.events, event)
-	return nil
 }

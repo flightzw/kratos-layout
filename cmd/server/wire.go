@@ -8,14 +8,14 @@ package main
 import (
 	"log/slog"
 
-	"github.com/go-kratos/kratos-layout/internal/biz"
-	"github.com/go-kratos/kratos-layout/internal/conf"
-	"github.com/go-kratos/kratos-layout/internal/data"
-	"github.com/go-kratos/kratos-layout/internal/server"
-	"github.com/go-kratos/kratos-layout/internal/service"
-
 	"github.com/go-kratos/kratos/v3"
 	"github.com/google/wire"
+
+	"github.com/flightzw/kratos-layout/internal/biz"
+	"github.com/flightzw/kratos-layout/internal/conf"
+	"github.com/flightzw/kratos-layout/internal/data"
+	"github.com/flightzw/kratos-layout/internal/server"
+	"github.com/flightzw/kratos-layout/internal/service"
 )
 
 // wireApp init kratos application.

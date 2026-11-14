@@ -2,266 +2,368 @@ package data
 
 import (
 	"context"
-	stdsql "database/sql"
+	"errors"
+	"slices"
+	"strings"
 	"testing"
+	"time"
 
-	"github.com/go-kratos/kratos-layout/internal/biz"
-	"github.com/go-kratos/kratos-layout/internal/data/ent"
-
-	"entgo.io/ent/dialect"
-	entsql "entgo.io/ent/dialect/sql"
-	kratoserrors "github.com/go-kratos/kratos/v3/errors"
-	"github.com/google/uuid"
+	"go.einride.tech/aip/filtering"
 	"go.einride.tech/aip/ordering"
+	expr "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+
+	"github.com/flightzw/kratos-layout/api/commons/errno"
+	"github.com/flightzw/kratos-layout/internal/biz"
+	"github.com/flightzw/kratos-layout/internal/data/model"
+	"github.com/flightzw/kratos-layout/internal/data/query"
+	"github.com/flightzw/kratos-layout/pkg/aip"
+
 	_ "modernc.org/sqlite"
 )
 
-// newTestRepo opens an in-memory SQLite database with the schema applied, so
-// repo tests exercise real ent queries at the storage boundary. The modernc
-// driver registers itself as "sqlite", so the ent dialect is set explicitly.
-func newTestRepo(t *testing.T) (biz.TodoRepo, *ent.Client) {
+func newTestTodoRepo(t *testing.T) (biz.TodoRepo, *gorm.DB) {
 	t.Helper()
-	db, err := stdsql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)")
+	db, err := gorm.Open(sqlite.New(sqlite.Config{DriverName: "sqlite", DSN: ":memory:"}), &gorm.Config{})
 	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+		t.Fatal(err)
 	}
-	client := ent.NewClient(ent.Driver(entsql.OpenDB(dialect.SQLite, db)))
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	t.Cleanup(func() {
-		client.Close()
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
 	})
-	if err := client.Schema.Create(context.Background()); err != nil {
-		t.Fatalf("create schema: %v", err)
+	if err := db.AutoMigrate(&model.Todo{}); err != nil {
+		t.Fatal(err)
 	}
-	return NewTodoRepo(&Data{db: client}), client
+	return NewTodoRepo(&Data{db: db.Debug(), query: query.Use(db)}), db
 }
 
-// orderByCreatedAt keeps list assertions deterministic.
-func orderByCreatedAt() biz.ListOption {
-	return biz.ListOrderBy(ordering.OrderBy{
-		Fields: []ordering.Field{{Path: "created_at"}},
-	})
+func seedTodo(t *testing.T, db *gorm.DB, id int32, name string, deleted bool) *model.Todo {
+	t.Helper()
+	created := time.Date(2026, 1, int(id), 3, 4, 5, 0, time.UTC)
+	record := &model.Todo{ID: id, Name: name, CreatedAt: created, UpdatedAt: created.Add(time.Hour)}
+	if deleted {
+		record.DeletedAt = gorm.DeletedAt{Time: created.Add(2 * time.Hour), Valid: true}
+	}
+	if err := db.Create(record).Error; err != nil {
+		t.Fatal(err)
+	}
+	return record
 }
 
-func TestTodoRepoCRUD(t *testing.T) {
-	ctx := context.Background()
-	repo, _ := newTestRepo(t)
-
-	created, err := repo.CreateTodo(ctx, &biz.Todo{
-		Title:   "write tests",
-		Content: "cover repo CRUD",
-	})
-	if err != nil {
-		t.Fatalf("CreateTodo() error = %v", err)
-	}
-	if created.ID == uuid.Nil {
-		t.Fatal("CreateTodo() did not assign an id")
-	}
-	if created.CreatedAt.IsZero() || created.UpdatedAt.IsZero() {
-		t.Fatal("CreateTodo() did not set timestamps")
-	}
-
-	got, err := repo.FindByID(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("FindByID() error = %v", err)
-	}
-	if got.Title != "write tests" || got.Content != "cover repo CRUD" {
-		t.Fatalf("FindByID() = %+v, want created todo", got)
-	}
-
-	updated, err := repo.UpdateTodo(ctx, &biz.Todo{
-		ID:        created.ID,
-		Title:     "write repo tests",
-		Content:   "cover repo CRUD",
-		Completed: true,
-	})
-	if err != nil {
-		t.Fatalf("UpdateTodo() error = %v", err)
-	}
-	if updated.Title != "write repo tests" || !updated.Completed {
-		t.Fatalf("UpdateTodo() = %+v, want updated title and completed", updated)
-	}
-	if updated.ID != created.ID {
-		t.Fatalf("UpdateTodo() id = %v, want %v", updated.ID, created.ID)
-	}
-
-	if _, err := repo.FindByID(ctx, uuid.Must(uuid.NewV7())); !kratoserrors.IsNotFound(err) {
-		t.Fatalf("FindByID(missing) error = %v, want not found", err)
-	}
-}
-
-func TestTodoRepoDeleteIsSoft(t *testing.T) {
-	ctx := context.Background()
-	repo, client := newTestRepo(t)
-
-	created, err := repo.CreateTodo(ctx, &biz.Todo{Title: "soft delete me"})
-	if err != nil {
-		t.Fatalf("CreateTodo() error = %v", err)
-	}
-
-	if err := repo.DeleteTodo(ctx, created.ID); err != nil {
-		t.Fatalf("DeleteTodo() error = %v", err)
-	}
-
-	// The row survives with status flipped to deleted.
-	po, err := client.Todo.Get(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("ent Get() after delete error = %v", err)
-	}
-	if po.Status != biz.TodoStatusDeleted {
-		t.Fatalf("status after delete = %d, want %d", po.Status, biz.TodoStatusDeleted)
-	}
-
-	// Every read and write path hides it.
-	if _, err := repo.FindByID(ctx, created.ID); !kratoserrors.IsNotFound(err) {
-		t.Fatalf("FindByID() after delete error = %v, want not found", err)
-	}
-	todos, err := repo.ListTodos(ctx, biz.ListLimit(10))
-	if err != nil {
-		t.Fatalf("ListTodos() error = %v", err)
-	}
-	if len(todos) != 0 {
-		t.Fatalf("ListTodos() len = %d, want 0", len(todos))
-	}
-	if _, err := repo.UpdateTodo(ctx, &biz.Todo{ID: created.ID, Title: "revive"}); !kratoserrors.IsNotFound(err) {
-		t.Fatalf("UpdateTodo() after delete error = %v, want not found", err)
-	}
-	if err := repo.DeleteTodo(ctx, created.ID); !kratoserrors.IsNotFound(err) {
-		t.Fatalf("DeleteTodo() twice error = %v, want not found", err)
-	}
-}
-
-func TestTodoRepoListPagination(t *testing.T) {
-	ctx := context.Background()
-	repo, _ := newTestRepo(t)
-
-	for _, title := range []string{"first", "second", "third"} {
-		if _, err := repo.CreateTodo(ctx, &biz.Todo{Title: title}); err != nil {
-			t.Fatalf("CreateTodo(%q) error = %v", title, err)
-		}
-	}
-
-	firstPage, err := repo.ListTodos(ctx, orderByCreatedAt(), biz.ListLimit(2))
-	if err != nil {
-		t.Fatalf("ListTodos(first page) error = %v", err)
-	}
-	if len(firstPage) != 2 {
-		t.Fatalf("ListTodos(first page) len = %d, want 2", len(firstPage))
-	}
-	if firstPage[0].Title != "first" {
-		t.Fatalf("ListTodos(first page) title = %q, want first", firstPage[0].Title)
-	}
-
-	secondPage, err := repo.ListTodos(ctx, orderByCreatedAt(), biz.ListLimit(2), biz.ListOffset(2))
-	if err != nil {
-		t.Fatalf("ListTodos(second page) error = %v", err)
-	}
-	if len(secondPage) != 1 {
-		t.Fatalf("ListTodos(second page) len = %d, want 1", len(secondPage))
-	}
-	if secondPage[0].Title != "third" {
-		t.Fatalf("ListTodos(second page) title = %q, want third", secondPage[0].Title)
-	}
-
-	if _, err := repo.ListTodos(ctx, biz.ListLimit(0)); !kratoserrors.IsBadRequest(err) {
-		t.Fatalf("ListTodos(zero limit) error = %v, want bad request", err)
-	}
-}
-
-// Offset pagination is only correct under a total order. With no order_by the
-// repo falls back to id, which is UUIDv7 and therefore time-ordered, so paging
-// covers every row exactly once.
-func TestTodoRepoListDefaultOrderIsStable(t *testing.T) {
-	ctx := context.Background()
-	repo, _ := newTestRepo(t)
-
-	const total = 6
-	titles := make([]string, 0, total)
-	for i := range total {
-		title := string(rune('a' + i))
-		if _, err := repo.CreateTodo(ctx, &biz.Todo{Title: title}); err != nil {
-			t.Fatalf("CreateTodo(%q) error = %v", title, err)
-		}
-		titles = append(titles, title)
-	}
-
-	// Page through without requesting any ordering.
-	var paged []string
-	for offset := 0; offset < total; offset += 2 {
-		page, err := repo.ListTodos(ctx, biz.ListLimit(2), biz.ListOffset(offset))
-		if err != nil {
-			t.Fatalf("ListTodos(offset=%d) error = %v", offset, err)
-		}
-		for _, todo := range page {
-			paged = append(paged, todo.Title)
-		}
-	}
-
-	if len(paged) != total {
-		t.Fatalf("paged through %d rows, want %d (duplicated or skipped)", len(paged), total)
-	}
-	for i, want := range titles {
-		if paged[i] != want {
-			t.Fatalf("paged = %v, want creation order %v", paged, titles)
-		}
-	}
-}
-
-// A caller-supplied sort key wins, and id breaks ties so equal keys still page
-// deterministically.
-func TestTodoRepoListOrderByTiesBrokenByID(t *testing.T) {
-	ctx := context.Background()
-	repo, _ := newTestRepo(t)
-
-	// Every row shares one title, so the requested sort key cannot order them.
-	var ids []uuid.UUID
-	for range 4 {
-		created, err := repo.CreateTodo(ctx, &biz.Todo{Title: "same"})
-		if err != nil {
-			t.Fatalf("CreateTodo() error = %v", err)
-		}
-		ids = append(ids, created.ID)
-	}
-
-	got, err := repo.ListTodos(ctx,
-		biz.ListOrderBy(ordering.OrderBy{Fields: []ordering.Field{{Path: "title"}}}),
-		biz.ListLimit(10),
+func parseTodoFilter(t *testing.T, text string) filtering.Filter {
+	t.Helper()
+	declarations, err := filtering.NewDeclarations(
+		filtering.DeclareStandardFunctions(),
+		filtering.DeclareIdent("id", filtering.TypeInt),
+		filtering.DeclareIdent("name", filtering.TypeString),
+		filtering.DeclareIdent("created_at", filtering.TypeTimestamp),
+		filtering.DeclareIdent("updated_at", filtering.TypeTimestamp),
 	)
 	if err != nil {
-		t.Fatalf("ListTodos() error = %v", err)
+		t.Fatal(err)
 	}
-	if len(got) != len(ids) {
-		t.Fatalf("ListTodos() len = %d, want %d", len(got), len(ids))
+	filter, err := filtering.ParseFilterString(text, declarations)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for i, want := range ids {
-		if got[i].ID != want {
-			t.Fatalf("row %d id = %v, want %v (ties must fall back to id)", i, got[i].ID, want)
-		}
+	return filter
+}
+
+func TestCreateTodo(t *testing.T) {
+	repo, db := newTestTodoRepo(t)
+	ctx := context.Background()
+	first, err := repo.CreateTodo(ctx, &biz.Todo{Name: "first"})
+	if err != nil || first <= 0 {
+		t.Fatalf("ID=%d error=%v", first, err)
+	}
+	second, err := repo.CreateTodo(ctx, &biz.Todo{Name: "second"})
+	if err != nil || second <= first {
+		t.Fatalf("second ID=%d first=%d error=%v", second, first, err)
+	}
+	var record model.Todo
+	if err := db.First(&record, first).Error; err != nil {
+		t.Fatal(err)
+	}
+	if record.Name != "first" || record.CreatedAt.IsZero() || record.UpdatedAt.IsZero() || record.DeletedAt.Valid {
+		t.Fatalf("stored=%+v", record)
+	}
+	if _, err := repo.CreateTodo(ctx, &biz.Todo{ID: first, Name: "duplicate"}); !errno.IsReasonUnspecified(err) {
+		t.Fatalf("duplicate ID error=%v", err)
 	}
 }
 
-func TestTodoRepoListOrderByDesc(t *testing.T) {
-	ctx := context.Background()
-	repo, _ := newTestRepo(t)
+func TestGetTodo(t *testing.T) {
+	tests := []struct {
+		name          string
+		seed, deleted bool
+	}{
+		{name: "existing", seed: true}, {name: "missing"}, {name: "soft deleted", seed: true, deleted: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, db := newTestTodoRepo(t)
+			var stored *model.Todo
+			if tt.seed {
+				stored = seedTodo(t, db, 1, "test", tt.deleted)
+			}
+			todo, err := repo.GetTodo(context.Background(), 1)
+			if !tt.seed || tt.deleted {
+				if todo != nil || !errno.IsTodoNotFound(err) {
+					t.Fatalf("todo=%+v error=%v", todo, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if todo.ID != stored.ID || todo.Name != stored.Name || !todo.CreatedAt.Equal(stored.CreatedAt) || !todo.UpdatedAt.Equal(stored.UpdatedAt) {
+				t.Fatalf("domain=%+v stored=%+v", todo, stored)
+			}
+		})
+	}
+}
 
-	for _, title := range []string{"alpha", "beta", "gamma"} {
-		if _, err := repo.CreateTodo(ctx, &biz.Todo{Title: title}); err != nil {
-			t.Fatalf("CreateTodo(%q) error = %v", title, err)
+func TestUpdateTodo(t *testing.T) {
+	tests := []struct {
+		name, before, after string
+		missing, deleted    bool
+	}{
+		{name: "changed value", before: "before", after: "changed"},
+		{name: "unchanged value", before: "same", after: "same"},
+		{name: "zero value is persisted", before: "before"},
+		{name: "missing row is a no-op", after: "changed", missing: true},
+		{name: "deleted row stays deleted", before: "deleted", after: "changed", deleted: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, db := newTestTodoRepo(t)
+			if !tt.missing {
+				seedTodo(t, db, 1, tt.before, tt.deleted)
+			}
+			seedTodo(t, db, 2, "untouched", false)
+			if err := repo.UpdateTodo(context.Background(), 1, &biz.UpdateTodoForm{Name: tt.after}); err != nil {
+				t.Fatal(err)
+			}
+			var target model.Todo
+			err := db.Unscoped().First(&target, 1).Error
+			if tt.missing {
+				if !errors.Is(err, gorm.ErrRecordNotFound) {
+					t.Fatalf("missing row was created: %+v error=%v", target, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := tt.after
+				if tt.deleted {
+					want = tt.before
+				}
+				if target.Name != want || target.DeletedAt.Valid != tt.deleted {
+					t.Fatalf("stored=%+v", target)
+				}
+			}
+			other, err := repo.GetTodo(context.Background(), 2)
+			if err != nil || other.Name != "untouched" {
+				t.Fatalf("other row=%+v error=%v", other, err)
+			}
+		})
+	}
+}
+
+func TestDeleteTodo(t *testing.T) {
+	tests := []struct {
+		name             string
+		missing, deleted bool
+	}{
+		{name: "soft delete"}, {name: "missing", missing: true}, {name: "already deleted", deleted: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, db := newTestTodoRepo(t)
+			if !tt.missing {
+				seedTodo(t, db, 1, "test", tt.deleted)
+			}
+			seedTodo(t, db, 2, "untouched", false)
+			err := repo.DeleteTodo(context.Background(), 1)
+			if tt.missing || tt.deleted {
+				if !errno.IsTodoNotFound(err) {
+					t.Fatalf("delete error=%v", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := repo.GetTodo(context.Background(), 1); !errno.IsTodoNotFound(err) {
+					t.Fatalf("deleted row visible: %v", err)
+				}
+				var record model.Todo
+				if err := db.Unscoped().First(&record, 1).Error; err != nil {
+					t.Fatal(err)
+				}
+				if !record.DeletedAt.Valid || record.Name != "test" {
+					t.Fatalf("soft-deleted record=%+v", record)
+				}
+			}
+			if _, err := repo.GetTodo(context.Background(), 2); err != nil {
+				t.Fatalf("unrelated row: %v", err)
+			}
+		})
+	}
+}
+
+func TestListTodo(t *testing.T) {
+	tests := []struct {
+		name, filter string
+		opts         []aip.ListOption
+		ids          []int32
+		total        int64
+	}{
+		{name: "default order excludes deleted", ids: []int32{1, 2, 3, 5}, total: 4},
+		{name: "descending page", opts: []aip.ListOption{aip.ListOrderBy(ordering.OrderBy{Fields: []ordering.Field{{Path: "id", Desc: true}}}), aip.ListOffset(1), aip.ListLimit(2)}, ids: []int32{3, 2}, total: 4},
+		{name: "empty page retains total", opts: []aip.ListOption{aip.ListOffset(10)}, total: 4},
+		{name: "deterministic name ties", opts: []aip.ListOption{aip.ListOrderBy(ordering.OrderBy{Fields: []ordering.Field{{Path: "name"}}})}, ids: []int32{2, 1, 3, 5}, total: 4},
+		{name: "created at descending", opts: []aip.ListOption{aip.ListOrderBy(ordering.OrderBy{Fields: []ordering.Field{{Path: "created_at", Desc: true}}})}, ids: []int32{5, 3, 2, 1}, total: 4},
+		{name: "name filter", filter: `name = "beta"`, ids: []int32{1, 3}, total: 2},
+		{name: "filtered page retains count", filter: `name = "beta"`, opts: []aip.ListOption{aip.ListOrderBy(ordering.OrderBy{Fields: []ordering.Field{{Path: "id", Desc: true}}}), aip.ListOffset(1), aip.ListLimit(1)}, ids: []int32{1}, total: 2},
+		{name: "filtered empty page retains count", filter: `name = "beta"`, opts: []aip.ListOption{aip.ListOffset(10)}, total: 2},
+		{name: "no matches", filter: `name = "absent"`},
+		{name: "deleted row never matches", filter: `name = "deleted"`},
+		{name: "compound filter", filter: `id > 1 AND name != "gamma"`, ids: []int32{2, 3}, total: 2},
+		{name: "timestamp filter", filter: `updated_at >= timestamp("2026-01-03T00:00:00Z")`, ids: []int32{3, 5}, total: 2},
+		{name: "SQL metacharacters are literal", filter: `name = "beta' OR 1=1 --"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, db := newTestTodoRepo(t)
+			for i, name := range []string{"beta", "alpha", "beta", "deleted", "gamma"} {
+				seedTodo(t, db, int32(i+1), name, i == 3)
+			}
+			opts := append([]aip.ListOption{aip.ListFilter(parseTodoFilter(t, tt.filter))}, tt.opts...)
+			todos, total, err := repo.ListTodo(context.Background(), opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids := make([]int32, 0, len(todos))
+			for _, todo := range todos {
+				ids = append(ids, todo.ID)
+			}
+			if total != tt.total || !slices.Equal(ids, tt.ids) {
+				t.Fatalf("IDs=%v total=%d, want IDs=%v total=%d", ids, total, tt.ids, tt.total)
+			}
+		})
+	}
+	t.Run("default limit", func(t *testing.T) {
+		repo, db := newTestTodoRepo(t)
+		for i := int32(1); i <= 21; i++ {
+			seedTodo(t, db, i, "test", false)
 		}
-	}
+		todos, total, err := repo.ListTodo(context.Background())
+		if err != nil || total != 21 || len(todos) != 20 {
+			t.Fatalf("count=%d total=%d error=%v", len(todos), total, err)
+		}
+	})
+}
 
-	todos, err := repo.ListTodos(ctx,
-		biz.ListOrderBy(ordering.OrderBy{
-			Fields: []ordering.Field{{Path: "title", Desc: true}},
-		}),
-		biz.ListLimit(10),
-	)
-	if err != nil {
-		t.Fatalf("ListTodos(order desc) error = %v", err)
+func TestListTodoTranslationErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		option aip.ListOption
+	}{
+		{name: "malformed filter", option: aip.ListFilter(filtering.Filter{CheckedExpr: &expr.CheckedExpr{}})},
+		{name: "unsafe order path", option: aip.ListOrderBy(ordering.OrderBy{Fields: []ordering.Field{{Path: "id; DROP TABLE todo"}}})},
 	}
-	if len(todos) != 3 {
-		t.Fatalf("ListTodos(order desc) len = %d, want 3", len(todos))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, _ := newTestTodoRepo(t)
+			todos, total, err := repo.ListTodo(context.Background(), tt.option)
+			if !errno.IsInvalidArgument(err) || todos != nil || total != 0 {
+				t.Fatalf("todos=%+v total=%d error=%v", todos, total, err)
+			}
+		})
 	}
-	if todos[0].Title != "gamma" || todos[2].Title != "alpha" {
-		t.Fatalf("ListTodos(order desc) = %q..%q, want gamma..alpha", todos[0].Title, todos[2].Title)
+}
+
+func TestTodoRepoStorageErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(context.Context, biz.TodoRepo) error
+	}{
+		{name: "create", call: func(ctx context.Context, r biz.TodoRepo) error {
+			_, err := r.CreateTodo(ctx, &biz.Todo{Name: "test"})
+			return err
+		}},
+		{name: "get", call: func(ctx context.Context, r biz.TodoRepo) error { _, err := r.GetTodo(ctx, 1); return err }},
+		{name: "list", call: func(ctx context.Context, r biz.TodoRepo) error { _, _, err := r.ListTodo(ctx); return err }},
+		{name: "update", call: func(ctx context.Context, r biz.TodoRepo) error {
+			return r.UpdateTodo(ctx, 1, &biz.UpdateTodoForm{Name: "changed"})
+		}},
+		{name: "delete", call: func(ctx context.Context, r biz.TodoRepo) error { return r.DeleteTodo(ctx, 1) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, db := newTestTodoRepo(t)
+			seedTodo(t, db, 1, "before", false)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			err := tt.call(ctx, repo)
+			if !errno.IsReasonUnspecified(err) || !errors.Is(err, context.Canceled) {
+				t.Fatalf("storage error=%v", err)
+			}
+			todo, err := repo.GetTodo(context.Background(), 1)
+			if err != nil || todo.Name != "before" {
+				t.Fatalf("failed request mutated row: %+v error=%v", todo, err)
+			}
+		})
+	}
+}
+
+func TestListTodoSQLOrdering(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields []ordering.Field
+		want   string
+	}{
+		{name: "default ID", want: "`id`"},
+		{name: "ID ascending", fields: []ordering.Field{{Path: "id"}}, want: "`id`"},
+		{name: "ID descending", fields: []ordering.Field{{Path: "id", Desc: true}}, want: "`id` DESC"},
+		{name: "name tie breaker", fields: []ordering.Field{{Path: "name", Desc: true}}, want: "`name` DESC,`id`"},
+		{name: "explicit secondary ID", fields: []ordering.Field{{Path: "name"}, {Path: "id", Desc: true}}, want: "`name`,`id` DESC"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, db := newTestTodoRepo(t)
+			var selectSQL string
+			if err := db.Callback().Query().After("gorm:query").Register("test:capture_todo_select", func(tx *gorm.DB) {
+				sql := tx.Statement.SQL.String()
+				if strings.HasPrefix(sql, "SELECT * FROM `todo`") {
+					selectSQL = sql
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			_, _, err := repo.ListTodo(context.Background(),
+				aip.ListOrderBy(ordering.OrderBy{Fields: tt.fields}),
+				aip.ListLimit(2), aip.ListOffset(1),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, order, ok := strings.Cut(selectSQL, " ORDER BY ")
+			if !ok {
+				t.Fatalf("missing order clause: %s", selectSQL)
+			}
+			order, _, _ = strings.Cut(order, " LIMIT ")
+			if order != tt.want {
+				t.Fatalf("ORDER BY %s, want %s; SQL: %s", order, tt.want, selectSQL)
+			}
+		})
 	}
 }

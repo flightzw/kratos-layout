@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package commons.errno;
+
+import "errors/errors.proto";
+
+option go_package = "github.com/flightzw/kratos-layout/api/commons/errno;errno";
+
+enum ErrorReason {
+  option (errors.default_code) = 500;
+  REASON_UNSPECIFIED           = 0;
+  INVALID_ARGUMENT             = 1 [(errors.code) = 400];
+  STRUCT_CONVERT_FAILED        = 2 [(errors.code) = 500];
+  TODO_NOT_FOUND               = 3 [(errors.code) = 404];
+}

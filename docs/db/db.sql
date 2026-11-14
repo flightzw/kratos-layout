@@ -1,0 +1,9 @@
+CREATE DATABASE IF NOT EXISTS demo;
+
+CREATE TABLE demo.todo (
+  `id` INT AUTO_INCREMENT COMMENT '消息会话id' PRIMARY KEY,
+  `name` VARCHAR(20) NOT NULL COMMENT '名称',
+  `created_at` DATETIME (3) NOT NULL COMMENT '创建时间',
+  `updated_at` DATETIME (3) NOT NULL COMMENT '更新时间',
+  `deleted_at` DATETIME NULL COMMENT '更新时间'
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '消息会话表'

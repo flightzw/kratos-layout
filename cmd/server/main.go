@@ -2,12 +2,10 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 
-	"github.com/go-kratos/kratos-layout/internal/conf"
-
-	"github.com/go-kratos/kratos/contrib/otel/v3/tracing"
 	"github.com/go-kratos/kratos/v3"
 	"github.com/go-kratos/kratos/v3/config"
 	"github.com/go-kratos/kratos/v3/config/env"
@@ -16,6 +14,9 @@ import (
 	"github.com/go-kratos/kratos/v3/transport/grpc"
 	"github.com/go-kratos/kratos/v3/transport/http"
 
+	"github.com/flightzw/kratos-layout/internal/conf"
+
+	_ "github.com/joho/godotenv/autoload"
 	_ "go.uber.org/automaxprocs"
 )
 
@@ -52,11 +53,12 @@ func newApp(logger *slog.Logger, gs *grpc.Server, hs *http.Server) *kratos.App {
 func main() {
 	flag.Parse()
 	logger := log.NewLogger(
-		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			AddSource: true,
-			Level:     slog.LevelInfo,
+		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			AddSource:   true,
+			Level:       slog.LevelInfo,
+			ReplaceAttr: logReplaceAttr,
 		}),
-		log.WithExtractor(tracing.TraceAttrs),
+		// log.WithExtractor(tracing.TraceAttrs),
 	).With(
 		slog.String("service.id", id),
 		slog.String("service.name", Name),
@@ -69,7 +71,11 @@ func main() {
 			env.NewSource("KRATOS"),
 		),
 	)
-	defer c.Close()
+	defer func() {
+		if err := c.Close(); err != nil {
+			logger.Error("failed closing config", "err", err)
+		}
+	}()
 
 	if err := c.Load(); err != nil {
 		panic(err)
@@ -90,4 +96,24 @@ func main() {
 	if err := app.Run(); err != nil {
 		panic(err)
 	}
+}
+
+func logReplaceAttr(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) != 0 {
+		return a
+	}
+	switch a.Key {
+	case slog.SourceKey:
+		if src, ok := a.Value.Any().(*slog.Source); ok {
+			if src.Function == "" {
+				return a
+			}
+			return slog.String(slog.SourceKey, fmt.Sprintf("%s:%d", src.Function, src.Line))
+		}
+	case slog.TimeKey:
+		if a.Value.Kind() == slog.KindTime {
+			return slog.String(a.Key, a.Value.Time().Format("2006-01-02 15:04:05.000"))
+		}
+	}
+	return a
 }

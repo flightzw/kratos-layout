@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package todo;
+
+import "gnostic/openapi/v3/annotations.proto";
+
+option go_package = "github.com/go-kratos/kratos-layout/api/todo;todo";
+
+option (gnostic.openapi.v3.document) = {
+  info: { title: "Todo 服务 API" description: "提供待办事项的创建、查询、更新和删除接口。" version: "1.0.0" }
+};

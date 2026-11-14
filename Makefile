@@ -7,16 +7,37 @@ VERSION=$(shell git describe --tags --always)
 init:
 	go install github.com/google/wire/cmd/wire@latest
 	go install github.com/bufbuild/buf/cmd/buf@latest
+	go install github.com/mikefarah/yq/v4@latest
+	go install github.com/air-verse/air@latest
+	go install github.com/joho/godotenv/cmd/godotenv@latest
+	go install gorm.io/gen/tools/gentool@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 
 .PHONY: config
 # generate internal proto
 config:
-	buf generate --template buf.gen.config.yaml
+	buf generate --template manifest/buf/buf.gen.config.yaml
+
+.PHONY: errno
+# generate errno proto
+errno:
+	buf generate --template manifest/buf/buf.gen.errno.yaml
 
 .PHONY: api
 # generate api proto
 api:
-	buf generate --template buf.gen.yaml
+	buf generate --template manifest/buf/buf.gen.yaml
+	yq -o=json docs/openapi/openapi.yaml > docs/openapi/openapi.json && rm docs/openapi/openapi.yaml
+
+.PHONY: gormgen
+# generate gorm dao
+gormgen:
+	gentool -c gorm.gen.yaml
+
+.PHONY: wire
+# generate wire injectors
+wire:
+	wire ./cmd/...
 
 .PHONY: build
 # build

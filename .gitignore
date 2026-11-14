@@ -31,8 +31,13 @@ Thumbs.db
 *.key
 *.log
 bin/
+tmp/
 
 # Develop tools
 .vscode/
 .idea/
 *.swp
+
+# config
+.env
+.vscode

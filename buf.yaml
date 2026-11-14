@@ -2,5 +2,15 @@ version: v2
 modules:
   - path: api
   - path: internal
+  - path: third_party
 deps:
   - buf.build/googleapis/googleapis
+  - buf.build/bufbuild/protovalidate
+  - buf.build/gnostic/gnostic
+lint:
+  except:
+    - RPC_REQUEST_RESPONSE_UNIQUE
+    - RPC_RESPONSE_STANDARD_NAME
+    - ENUM_VALUE_PREFIX
+    - PACKAGE_VERSION_SUFFIX
+    - SERVICE_SUFFIX
