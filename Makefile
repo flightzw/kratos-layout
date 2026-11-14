@@ -10,8 +10,9 @@ init:
 	go install github.com/mikefarah/yq/v4@latest
 	go install github.com/air-verse/air@latest
 	go install github.com/joho/godotenv/cmd/godotenv@latest
-	go install gorm.io/gen/tools/gentool@latest
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+	go install github.com/flightzw/gorm-genkit/cmd/genkit@latest
+# 	go install gorm.io/gen/tools/gentool@latest
 
 .PHONY: config
 # generate internal proto
@@ -32,7 +33,7 @@ api:
 .PHONY: gormgen
 # generate gorm dao
 gormgen:
-	gentool -c gorm.gen.yaml
+	genkit -c gorm.gen.yaml
 
 .PHONY: wire
 # generate wire injectors

@@ -40,7 +40,7 @@ func (t *todoRepo) GetTodo(ctx context.Context, id int32) (*biz.Todo, error) {
 }
 
 func (t *todoRepo) ListTodo(ctx context.Context, opts ...aip.ListOption) (data []*biz.Todo, total int64, err error) {
-	if total, err = aipgorm.FindByPage(t.data.db, &data, opts...); err != nil {
+	if total, err = aipgorm.FindByPage(t.data.db.WithContext(ctx), &data, opts...); err != nil {
 		return nil, 0, todoError("list todo", err)
 	}
 	return data, total, nil
@@ -85,6 +85,9 @@ func toBiz(todo *model.Todo) *biz.Todo {
 }
 
 func todoError(operation string, err error) error {
+	if errors.Is(err, aipgorm.ErrInvalidQuery) {
+		return biz.ErrTodoInvalidArgument.WithCause(fmt.Errorf("%s: %w", operation, err))
+	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return biz.ErrTodoNotFound
 	}

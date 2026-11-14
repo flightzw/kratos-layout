@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogf/gf/v2/os/gtime"
 	"go.einride.tech/aip/filtering"
 	"go.einride.tech/aip/ordering"
 	expr "google.golang.org/genproto/googleapis/api/expr/v1alpha1"
@@ -48,7 +49,7 @@ func newTestTodoRepo(t *testing.T) (biz.TodoRepo, *gorm.DB) {
 func seedTodo(t *testing.T, db *gorm.DB, id int32, name string, deleted bool) *model.Todo {
 	t.Helper()
 	created := time.Date(2026, 1, int(id), 3, 4, 5, 0, time.UTC)
-	record := &model.Todo{ID: id, Name: name, CreatedAt: created, UpdatedAt: created.Add(time.Hour)}
+	record := &model.Todo{ID: id, Name: name, CreatedAt: gtime.New(created), UpdatedAt: gtime.New(created.Add(time.Hour))}
 	if deleted {
 		record.DeletedAt = gorm.DeletedAt{Time: created.Add(2 * time.Hour), Valid: true}
 	}
@@ -226,10 +227,10 @@ func TestListTodo(t *testing.T) {
 		ids          []int32
 		total        int64
 	}{
-		{name: "default order excludes deleted", ids: []int32{1, 2, 3, 5}, total: 4},
+		{name: "explicit ID order excludes deleted", ids: []int32{1, 2, 3, 5}, total: 4},
 		{name: "descending page", opts: []aip.ListOption{aip.ListOrderBy(ordering.OrderBy{Fields: []ordering.Field{{Path: "id", Desc: true}}}), aip.ListOffset(1), aip.ListLimit(2)}, ids: []int32{3, 2}, total: 4},
 		{name: "empty page retains total", opts: []aip.ListOption{aip.ListOffset(10)}, total: 4},
-		{name: "deterministic name ties", opts: []aip.ListOption{aip.ListOrderBy(ordering.OrderBy{Fields: []ordering.Field{{Path: "name"}}})}, ids: []int32{2, 1, 3, 5}, total: 4},
+		{name: "explicit name and ID order", opts: []aip.ListOption{aip.ListOrderBy(ordering.OrderBy{Fields: []ordering.Field{{Path: "name"}, {Path: "id"}}})}, ids: []int32{2, 1, 3, 5}, total: 4},
 		{name: "created at descending", opts: []aip.ListOption{aip.ListOrderBy(ordering.OrderBy{Fields: []ordering.Field{{Path: "created_at", Desc: true}}})}, ids: []int32{5, 3, 2, 1}, total: 4},
 		{name: "name filter", filter: `name = "beta"`, ids: []int32{1, 3}, total: 2},
 		{name: "filtered page retains count", filter: `name = "beta"`, opts: []aip.ListOption{aip.ListOrderBy(ordering.OrderBy{Fields: []ordering.Field{{Path: "id", Desc: true}}}), aip.ListOffset(1), aip.ListLimit(1)}, ids: []int32{1}, total: 2},
@@ -246,7 +247,10 @@ func TestListTodo(t *testing.T) {
 			for i, name := range []string{"beta", "alpha", "beta", "deleted", "gamma"} {
 				seedTodo(t, db, int32(i+1), name, i == 3)
 			}
-			opts := append([]aip.ListOption{aip.ListFilter(parseTodoFilter(t, tt.filter))}, tt.opts...)
+			opts := append([]aip.ListOption{
+				aip.ListOrderBy(ordering.OrderBy{Fields: []ordering.Field{{Path: "id"}}}),
+				aip.ListFilter(parseTodoFilter(t, tt.filter)),
+			}, tt.opts...)
 			todos, total, err := repo.ListTodo(context.Background(), opts...)
 			if err != nil {
 				t.Fatal(err)
@@ -331,10 +335,10 @@ func TestListTodoSQLOrdering(t *testing.T) {
 		fields []ordering.Field
 		want   string
 	}{
-		{name: "default ID", want: "`id`"},
+		{name: "no implicit order"},
 		{name: "ID ascending", fields: []ordering.Field{{Path: "id"}}, want: "`id`"},
 		{name: "ID descending", fields: []ordering.Field{{Path: "id", Desc: true}}, want: "`id` DESC"},
-		{name: "name tie breaker", fields: []ordering.Field{{Path: "name", Desc: true}}, want: "`name` DESC,`id`"},
+		{name: "requested name order only", fields: []ordering.Field{{Path: "name", Desc: true}}, want: "`name` DESC"},
 		{name: "explicit secondary ID", fields: []ordering.Field{{Path: "name"}, {Path: "id", Desc: true}}, want: "`name`,`id` DESC"},
 	}
 	for _, tt := range tests {
@@ -357,6 +361,12 @@ func TestListTodoSQLOrdering(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, order, ok := strings.Cut(selectSQL, " ORDER BY ")
+			if tt.want == "" {
+				if selectSQL == "" || ok {
+					t.Fatalf("unexpected SQL for empty order: %s", selectSQL)
+				}
+				return
+			}
 			if !ok {
 				t.Fatalf("missing order clause: %s", selectSQL)
 			}
@@ -365,5 +375,42 @@ func TestListTodoSQLOrdering(t *testing.T) {
 				t.Fatalf("ORDER BY %s, want %s; SQL: %s", order, tt.want, selectSQL)
 			}
 		})
+	}
+}
+
+func TestTodoGtimeRoundTrip(t *testing.T) {
+	_, db := newTestTodoRepo(t)
+	initial := time.Date(2026, 1, 2, 3, 4, 5, 123000000, time.UTC)
+	updateTime := initial.Add(time.Hour)
+	db.NowFunc = func() time.Time { return updateTime }
+	repo := NewTodoRepo(&Data{db: db, query: query.Use(db)})
+	ctx := context.Background()
+	id, err := repo.CreateTodo(ctx, &biz.Todo{Name: "test", CreatedAt: gtime.New(initial), UpdatedAt: gtime.New(initial)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	todo, err := repo.GetTodo(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !todo.CreatedAt.Equal(gtime.New(initial)) || !todo.UpdatedAt.Equal(gtime.New(initial)) {
+		t.Fatalf("read-back timestamps: %+v", todo)
+	}
+	if err := repo.UpdateTodo(ctx, id, &biz.UpdateTodoForm{Name: "changed"}); err != nil {
+		t.Fatal(err)
+	}
+	todo, err = repo.GetTodo(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !todo.CreatedAt.Equal(gtime.New(initial)) || !todo.UpdatedAt.Equal(gtime.New(updateTime)) {
+		t.Fatalf("timestamps after update: %+v", todo)
+	}
+	todos, total, err := repo.ListTodo(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(todos) != 1 || !todos[0].CreatedAt.Equal(gtime.New(initial)) || !todos[0].UpdatedAt.Equal(gtime.New(updateTime)) {
+		t.Fatalf("listed timestamps: %+v total=%d", todos, total)
 	}
 }

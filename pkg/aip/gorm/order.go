@@ -34,7 +34,7 @@ func ApplyOrderBy(orderBy ordering.OrderBy, options ...OrderByOption) func(*gorm
 	for _, field := range orderBy.Fields {
 		c, err := column(field.Path, config.fields)
 		if err != nil {
-			translationErr = fmt.Errorf("aip/gorm: translate order: %w", err)
+			translationErr = fmt.Errorf("%w: translate order: %w", ErrInvalidQuery, err)
 			break
 		}
 		columns = append(columns, clause.OrderByColumn{Column: c, Desc: field.Desc})

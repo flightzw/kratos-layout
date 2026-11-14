@@ -29,8 +29,8 @@ func newTodo(db *gorm.DB, opts ...gen.DOOption) todo {
 	_todo.ALL = field.NewAsterisk(tableName)
 	_todo.ID = field.NewInt32(tableName, "id")
 	_todo.Name = field.NewString(tableName, "name")
-	_todo.CreatedAt = field.NewTime(tableName, "created_at")
-	_todo.UpdatedAt = field.NewTime(tableName, "updated_at")
+	_todo.CreatedAt = field.NewField(tableName, "created_at")
+	_todo.UpdatedAt = field.NewField(tableName, "updated_at")
 	_todo.DeletedAt = field.NewField(tableName, "deleted_at")
 
 	_todo.fillFieldMap()
@@ -45,8 +45,8 @@ type todo struct {
 	ALL       field.Asterisk
 	ID        field.Int32  // 消息会话id
 	Name      field.String // 名称
-	CreatedAt field.Time   // 创建时间
-	UpdatedAt field.Time   // 更新时间
+	CreatedAt field.Field  // 创建时间
+	UpdatedAt field.Field  // 更新时间
 	DeletedAt field.Field  // 更新时间
 
 	fieldMap map[string]field.Expr
@@ -66,8 +66,8 @@ func (t *todo) updateTableName(table string) *todo {
 	t.ALL = field.NewAsterisk(table)
 	t.ID = field.NewInt32(table, "id")
 	t.Name = field.NewString(table, "name")
-	t.CreatedAt = field.NewTime(table, "created_at")
-	t.UpdatedAt = field.NewTime(table, "updated_at")
+	t.CreatedAt = field.NewField(table, "created_at")
+	t.UpdatedAt = field.NewField(table, "updated_at")
 	t.DeletedAt = field.NewField(table, "deleted_at")
 
 	t.fillFieldMap()

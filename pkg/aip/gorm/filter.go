@@ -42,7 +42,7 @@ func ApplyFilter(filter filtering.Filter, options ...FilterOption) func(*gorm.DB
 	}
 	return func(db *gorm.DB) *gorm.DB {
 		if err != nil {
-			_ = db.AddError(fmt.Errorf("aip/gorm: translate filter: %w", err)) // Returned through DB.Error.
+			_ = db.AddError(fmt.Errorf("%w: translate filter: %w", ErrInvalidQuery, err)) // Returned through DB.Error.
 			return db
 		}
 		if predicate == nil {

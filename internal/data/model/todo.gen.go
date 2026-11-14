@@ -5,8 +5,7 @@
 package model
 
 import (
-	"time"
-
+	"github.com/gogf/gf/v2/os/gtime"
 	"gorm.io/gorm"
 )
 
@@ -16,8 +15,8 @@ const TableNameTodo = "todo"
 type Todo struct {
 	ID        int32          `gorm:"column:id;primaryKey;autoIncrement:true;comment:消息会话id" json:"id"` // 消息会话id
 	Name      string         `gorm:"column:name;not null;comment:名称" json:"name"`                      // 名称
-	CreatedAt time.Time      `gorm:"column:created_at;not null;comment:创建时间" json:"created_at"`        // 创建时间
-	UpdatedAt time.Time      `gorm:"column:updated_at;not null;comment:更新时间" json:"updated_at"`        // 更新时间
+	CreatedAt *gtime.Time    `gorm:"column:created_at;not null;comment:创建时间" json:"created_at"`        // 创建时间
+	UpdatedAt *gtime.Time    `gorm:"column:updated_at;not null;comment:更新时间" json:"updated_at"`        // 更新时间
 	DeletedAt gorm.DeletedAt `gorm:"column:deleted_at;comment:更新时间" json:"deleted_at"`                 // 更新时间
 }
 

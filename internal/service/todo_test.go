@@ -7,6 +7,7 @@ import (
 	"time"
 
 	kerrors "github.com/go-kratos/kratos/v3/errors"
+	"github.com/gogf/gf/v2/os/gtime"
 	"go.einride.tech/aip/filtering"
 	"google.golang.org/protobuf/proto"
 
@@ -98,7 +99,7 @@ func TestTodoServiceCRUD(t *testing.T) {
 	})
 	t.Run("get maps resource and timestamps", func(t *testing.T) {
 		created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-		repo := &todoRepoStub{todo: &biz.Todo{ID: 9, Name: "test", CreatedAt: created, UpdatedAt: created.Add(time.Hour)}}
+		repo := &todoRepoStub{todo: &biz.Todo{ID: 9, Name: "test", CreatedAt: gtime.New(created), UpdatedAt: gtime.New(created.Add(time.Hour))}}
 		reply, err := newTestTodoService(t, repo).GetTodo(ctx, &v1.GetTodoRequest{Id: 9})
 		if err != nil {
 			t.Fatal(err)
@@ -152,7 +153,7 @@ func TestListTodo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-			todo := &biz.Todo{ID: 9, Name: "test", CreatedAt: created, UpdatedAt: created.Add(time.Hour)}
+			todo := &biz.Todo{ID: 9, Name: "test", CreatedAt: gtime.New(created), UpdatedAt: gtime.New(created.Add(time.Hour))}
 			repo := &todoRepoStub{todos: []*biz.Todo{todo}, total: 42}
 			svc := newTestTodoService(t, repo)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -275,6 +276,28 @@ func TestTodoServicePropagatesErrors(t *testing.T) {
 			}
 			if repo.calls != 1 || repo.ctx != ctx {
 				t.Fatal("expected one call with original context")
+			}
+		})
+	}
+}
+
+func TestGetTodoEmptyTimes(t *testing.T) {
+	tests := []struct {
+		name  string
+		value *gtime.Time
+	}{
+		{name: "nil"},
+		{name: "zero", value: gtime.New(time.Time{})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &todoRepoStub{todo: &biz.Todo{ID: 1, Name: "test", CreatedAt: tt.value, UpdatedAt: tt.value}}
+			reply, err := newTestTodoService(t, repo).GetTodo(context.Background(), &v1.GetTodoRequest{Id: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reply.Data.CreatedAt != "" || reply.Data.UpdatedAt != "" {
+				t.Fatalf("empty times: %+v", reply.Data)
 			}
 		})
 	}
