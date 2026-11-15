@@ -203,7 +203,6 @@ Dockerfile 的构建镜像当前为 Go 1.25，需要允许 Go 自动获取 `go.m
 ## 作为新项目模板
 
 1. 修改 `go.mod` 的模块路径，同步更新 Go import 和 proto 的 `go_package`。
-2. 检查 `go.mod` 中指向 `../kratos-ext` 的本地 `replace`，按实际依赖调整。
 3. 替换 Todo 示例、数据库结构、配置和 OpenAPI 元信息。
 4. 运行所需生成命令，执行测试和静态检查后开始开发。
 
