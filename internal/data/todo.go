@@ -24,14 +24,14 @@ func NewTodoRepo(data *Data) biz.TodoRepo {
 
 func (t *todoRepo) CreateTodo(ctx context.Context, todo *biz.Todo) (int32, error) {
 	record := newTodo(todo)
-	if err := t.data.query.Todo.WithContext(ctx).Create(record); err != nil {
+	if err := t.data.Query(ctx).Todo.WithContext(ctx).Create(record); err != nil {
 		return 0, todoError("create todo", err)
 	}
 	return record.ID, nil
 }
 
 func (t *todoRepo) GetTodo(ctx context.Context, id int32) (*biz.Todo, error) {
-	q := t.data.query.Todo
+	q := t.data.Query(ctx).Todo
 	record, err := q.WithContext(ctx).Where(q.ID.Eq(id)).First()
 	if err != nil {
 		return nil, todoError("get todo", err)
@@ -40,14 +40,14 @@ func (t *todoRepo) GetTodo(ctx context.Context, id int32) (*biz.Todo, error) {
 }
 
 func (t *todoRepo) ListTodo(ctx context.Context, opts ...aip.ListOption) (data []*biz.Todo, total int64, err error) {
-	if total, err = aipgorm.FindByPage(t.data.db.WithContext(ctx), &data, opts...); err != nil {
+	if total, err = aipgorm.FindByPage(t.data.DB(ctx), &data, opts...); err != nil {
 		return nil, 0, todoError("list todo", err)
 	}
 	return data, total, nil
 }
 
 func (t *todoRepo) UpdateTodo(ctx context.Context, id int32, form *biz.UpdateTodoForm) error {
-	q := t.data.query.Todo
+	q := t.data.Query(ctx).Todo
 	if _, err := q.WithContext(ctx).Where(q.ID.Eq(id)).Update(q.Name, form.Name); err != nil {
 		return todoError("update todo", err)
 	}
@@ -55,7 +55,7 @@ func (t *todoRepo) UpdateTodo(ctx context.Context, id int32, form *biz.UpdateTod
 }
 
 func (t *todoRepo) DeleteTodo(ctx context.Context, id int32) error {
-	q := t.data.query.Todo
+	q := t.data.Query(ctx).Todo
 	result, err := q.WithContext(ctx).Where(q.ID.Eq(id)).Delete()
 	if err != nil {
 		return todoError("delete todo", err)
