@@ -6,6 +6,7 @@ require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	buf.build/go/protovalidate v1.4.0
 	github.com/bdpiprava/scalar-go v0.13.0
+	github.com/go-kratos/kratos/contrib/encoding/json/v3 v3.0.0-20261123032133-56cfd65deee9
 	github.com/gogf/gf/v2 v2.10.4
 	github.com/google/wire v0.6.0
 	github.com/joho/godotenv v1.5.1
