@@ -159,6 +159,7 @@ export PATH="$(go env GOPATH)/bin:$PATH"
 | `make generate` | 执行 `go generate ./...`，随后整理 Go 模块依赖 |
 | `make all` | 依次执行 `api`、`config`、`generate` |
 | `make build` | 构建到 `bin/`，注入 Git 版本信息 |
+| `make docker` | 构建 Docker 镜像，默认名称为 `kratos-layout` |
 | `make help` | 查看命令列表 |
 
 `make all` 不包含 `make errno` 和 `make gormgen`。修改公共错误码后执行 `make errno`；
@@ -185,10 +186,10 @@ service 测试通过仓储替身注入真实 usecase；data 测试使用独立�
 
 ## Docker
 
-在项目根目录指定 Dockerfile 构建：
+在项目根目录构建并运行：
 
 ```bash
-docker build -f manifest/docker/Dockerfile -t kratos-layout .
+make docker
 
 docker run --rm -p 8000:8000 -p 9000:9000 \
   -v "$(pwd)/configs:/data/conf:ro" \
@@ -197,8 +198,17 @@ docker run --rm -p 8000:8000 -p 9000:9000 \
 ```
 
 将 `db-host`、账号和密码替换为容器能够访问的 MySQL 连接信息，并提前初始化数据库。
-Dockerfile 的构建镜像当前为 Go 1.25，需要允许 Go 自动获取 `go.mod` 指定的工具链，
-或调整构建镜像以匹配项目 Go 版本。
+构建和运行阶段均使用 Alpine 镜像，运行镜像保留 HTTPS 根证书。
+`make docker` 从 `go.mod` 读取 Go 版本、从 Git 读取应用版本（无历史时为 `dev`），
+支持覆盖 `IMAGE`、`VERSION`、`GO_VERSION`、`GOPROXY` 和 `APP_PATH`，例如：
+
+```bash
+make docker IMAGE=task-service:0.1.0 VERSION=0.1.0
+```
+
+默认构建 `./cmd/...` 下的单个入口；多个入口时使用 `APP_PATH=./cmd/<服务名>`。
+容器内的程序名固定为 `server`，兼容模板入口改名。
+`.dockerignore` 排除本地 `.env` 和构建产物，配置通过上述挂载和环境变量提供。
 
 ## 作为新项目模板
 

@@ -1,6 +1,10 @@
 GOHOSTOS:=$(shell go env GOHOSTOS)
 GOPATH:=$(shell go env GOPATH)
-VERSION=$(shell git describe --tags --always)
+VERSION=$(shell git describe --tags --always 2>/dev/null || echo dev)
+IMAGE ?= kratos-layout
+GO_VERSION ?= $(shell awk '$$1 == "go" { print $$2; exit }' go.mod)
+GOPROXY ?= https://proxy.golang.org,direct
+APP_PATH ?= ./cmd/...
 
 .PHONY: init
 # init env
@@ -43,6 +47,13 @@ wire:
 # build
 build:
 	mkdir -p bin/ && go build -ldflags "-X main.Version=$(VERSION)" -o ./bin/ ./...
+
+.PHONY: docker
+# build docker image
+docker:
+	docker build -f manifest/docker/Dockerfile -t "$(IMAGE)" \
+		--build-arg GO_VERSION="$(GO_VERSION)" --build-arg GOPROXY="$(GOPROXY)" \
+		--build-arg APP_PATH="$(APP_PATH)" --build-arg VERSION="$(VERSION)" .
 
 .PHONY: generate
 # generate
