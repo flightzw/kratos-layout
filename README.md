@@ -60,10 +60,10 @@ mysql -u root -p < docs/db/db.sql
 
 ### 2. 配置连接
 
-首次运行时复制环境变量示例；已有 `.env` 时直接编辑原文件：
+首次运行时执行初始化命令，自动从 `.env.example` 创建 `.env`，已有文件不会覆盖：
 
 ```bash
-cp .env.example .env
+make init
 ```
 
 修改 `.env` 中的连接信息，使数据库名称与建表脚本一致：
@@ -147,7 +147,7 @@ make init
 export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
-`make init` 安装 Wire、Buf、yq、Air、godotenv、genkit 和 golangci-lint。
+`make init` 创建本地 `.env`（已存在时保留），并安装 Wire、Buf、yq、Air、genkit 和 golangci-lint。
 
 | 命令 | 作用 |
 | --- | --- |
@@ -202,8 +202,13 @@ Dockerfile 的构建镜像当前为 Go 1.25，需要允许 Go 自动获取 `go.m
 
 ## 作为新项目模板
 
-1. 修改 `go.mod` 的模块路径，同步更新 Go import 和 proto 的 `go_package`。
-3. 替换 Todo 示例、数据库结构、配置和 OpenAPI 元信息。
-4. 运行所需生成命令，执行测试和静态检查后开始开发。
+使用 Kratos v3 CLI 从本仓库创建项目：
+
+```bash
+go install github.com/go-kratos/kratos/cmd/kratos/v3@latest
+kratos new task-service --repo https://github.com/flightzw/kratos-layout.git
+```
+
+将 `task-service` 替换为项目名，需要指定模板分支时添加 `--branch <分支名>`。
 
 提交采用 Conventional Commits，例如 `feat:`、`fix:`、`refactor:`、`docs:` 和 `test:`。

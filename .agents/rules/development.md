@@ -169,15 +169,19 @@ golangci-lint run
 
 - `scope` 可选，使用括号标识受影响模块，例如 `todo`、`data`、`api`、`deps`。
   依赖维护也可沿用项目的 `chore(deps)`。
-- 冒号后必须有一个空格，描述必须非空，准确概括结果；中文、英文均可，内容尽量精炼简短。
+- 提交前通过 `git log -20 --format=%s` 查看近期提交，描述、正文和脚注的语言优先与历史提交的主要语言保持一致，
+  不根据当前对话语言或单条提交决定。历史语言混用且无明显惯例时，参考相关模块的提交；
+  仍无法判断时使用项目文档的主要语言。用户明确指定提交语言时，以用户要求为准。
+- 冒号后必须有一个空格，描述必须非空，准确概括结果，内容尽量精炼简短。
   正文和脚注按需补充，与前一部分空一行。
 - 不兼容变更必须在冒号前标记 `!`，或使用 `BREAKING CHANGE: <说明>` 脚注。
   根据需要说明兼容性影响和迁移方式。
 - 一个提交应围绕一个明确目的；可独立交付的无关变更优先分开提交。
   用户明确要求整体提交时，按整体主要目的命名，并标记其中的不兼容变更。
 
-示例：`feat(todo): 支持名称过滤`、`fix(data): 修复分页查询取消失效`、
-`docs: 更新本地启动说明`、`refactor(api)!: 调整 Todo 请求与响应结构`。
+示例（语言按上述规则选择）：`feat(todo): support name filtering`、
+`fix(data): respect context cancellation in list queries`、`docs: update local setup instructions`、
+`refactor(api)!: revise Todo request and response messages`。
 
 ## 项目适配说明
 

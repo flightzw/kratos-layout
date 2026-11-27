@@ -5,13 +5,13 @@ VERSION=$(shell git describe --tags --always)
 .PHONY: init
 # init env
 init:
+	@test -e .env || test -L .env || cp .env.example .env
 	go install github.com/google/wire/cmd/wire@latest
 	go install github.com/bufbuild/buf/cmd/buf@latest
 	go install github.com/mikefarah/yq/v4@latest
 	go install github.com/air-verse/air@latest
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 	go install github.com/flightzw/gorm-genkit/cmd/genkit@latest
-# 	go install gorm.io/gen/tools/gentool@latest
 
 .PHONY: config
 # generate internal proto
